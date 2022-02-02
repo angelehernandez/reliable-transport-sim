@@ -20,6 +20,7 @@ class Streamer:
         self.buffer = {}
         self.expected = 1
         self.seqA = 1
+        self.closed = False
         executor = ThreadPoolExecutor(max_workers=1)
         executor.submit(self.listener)
 
@@ -70,15 +71,20 @@ class Streamer:
         # your code goes here!  The code below should be changed!
 
         # this sample code just calls the recvfrom method on the LossySocket
-        if self.expected in self.buffer:
-                cnt = self.expected + 1
-                totData = self.buffer[self.expected]
-                while cnt in self.buffer:
-                    print("count: " + str(cnt))
-                    totData += self.buffer[cnt]
-                    cnt += 1
-                self.expected = cnt
-                return totData
+        while len(self.buffer) == 0:
+            pass
+        while len(self.buffer) != 0:
+            if self.expected in self.buffer:
+                    cnt = self.expected + 1
+                    totData = self.buffer[self.expected]
+                    del(self.buffer[self.expected])
+                    while cnt in self.buffer:
+                        print("count: " + str(cnt))
+                        totData += self.buffer[cnt]
+                        del(self.buffer[cnt])
+                        cnt += 1
+                    self.expected = cnt
+                    return totData
 
 
 
