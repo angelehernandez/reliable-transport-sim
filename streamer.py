@@ -2,6 +2,7 @@
 import struct
 import sys
 from concurrent.futures import ThreadPoolExecutor
+import time
 
 from lossy_socket import LossyUDP
 # do not import anything else from socket except INADDR_ANY
@@ -21,6 +22,7 @@ class Streamer:
         self.expected = 1
         self.seqA = 1
         self.closed = False
+        self.ackd = False
         executor = ThreadPoolExecutor(max_workers=1)
         executor.submit(self.listener)
 
@@ -28,10 +30,14 @@ class Streamer:
         while not self.closed:  # a later hint will explain self.closed
             try:
                 data, addr = self.socket.recvfrom()
-                seq = data[:4]
+                ack = data[:4]
+                ack = int.from_bytes(ack, sys.byteorder)
+                seq = data[4:8]
                 seq = int.from_bytes(seq, sys.byteorder)
-                payload = data[4:]
+                payload = data[8:]
                 self.buffer[seq] = payload
+                if ack == 1:
+                    self.ackd = True
             except Exception as e:
                 print("listener died!")
                 print(e)
@@ -60,9 +66,13 @@ class Streamer:
         # for now I'm just sending the raw application-level data in one UDP payload
         seq = self.seqA
         for p in packets:
-            header = struct.pack('i', seq)
+            seqNum = struct.pack('i', seq)
+            ack = struct.pack('i',1)
             seq = seq + 1
-            p = header + p
+            p = ack + seqNum + p
+            while not self.ackd: 
+                time.sleep(0.01)
+            self.ackd = False
             self.socket.sendto(p, (self.dst_ip, self.dst_port))
         self.seqA = seq
 
@@ -94,4 +104,5 @@ class Streamer:
         """Cleans up. It should block (wait) until the Streamer is done with all
            the necessary ACKs and retransmissions"""
         # your code goes here, especially after you add ACKs and retransmissions.
-        pass
+        self.closed = True
+        self.socket.stoprecv()
