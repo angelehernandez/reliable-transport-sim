@@ -1,4 +1,4 @@
 # Reliable Streaming Network Transport Simulator
 
-by Steve Tarzia
+by Angel Hernandez and David Marquette
 
