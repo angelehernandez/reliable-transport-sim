@@ -70,28 +70,15 @@ class Streamer:
         # your code goes here!  The code below should be changed!
 
         # this sample code just calls the recvfrom method on the LossySocket
-        data, addr = self.socket.recvfrom()
-        seq = data[:4]
-        print("SEQUENCE NUMBER: " + str(int.from_bytes(seq, sys.byteorder)))
-        seq = int.from_bytes(seq, sys.byteorder)
-        payload = data[4:]
-        print("RECIEVED: " + str(seq) + " EXPECTED: " + str(self.expected))
-        # For now, I'll just pass the full UDP payload to the app
-        while seq != self.expected:
-            print("RECIEVED OUT OF ORDER")
-            self.buffer[seq] = payload
-            data, addr = self.socket.recvfrom()
-            seq = data[:4]
-            seq = int.from_bytes(seq, sys.byteorder)
-            payload = data[4:]
-        totData = payload
-        cnt = seq + 1
-        while cnt in self.buffer:
-            print("count: " + str(cnt))
-            totData += self.buffer[cnt]
-            cnt += 1
-        self.expected = cnt
-        return totData
+        if self.expected in self.buffer:
+                cnt = self.expected + 1
+                totData = self.buffer[self.expected]
+                while cnt in self.buffer:
+                    print("count: " + str(cnt))
+                    totData += self.buffer[cnt]
+                    cnt += 1
+                self.expected = cnt
+                return totData
 
 
 
