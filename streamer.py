@@ -23,6 +23,8 @@ class Streamer:
         self.seqA = 1
         self.closed = False
         self.ackd = False
+        self.inFlight = []
+        self.finRecieved = False
         executor = ThreadPoolExecutor(max_workers=1)
         executor.submit(self.listener)
 
@@ -31,13 +33,22 @@ class Streamer:
             try:
                 data, addr = self.socket.recvfrom()
                 ack = data[:4]
+                print(ack)
                 ack = int.from_bytes(ack, sys.byteorder)
                 seq = data[4:8]
                 seq = int.from_bytes(seq, sys.byteorder)
-                payload = data[8:]
-                self.buffer[seq] = payload
-                if ack == 1:
+                fin = data[8:12]
+                fin = int.from_bytes(fin, sys.byteorder)
+                print(str(ack) + " and " + str(seq))
+                if ack in self.inFlight:
                     self.ackd = True
+                    self.inFlight.remove(ack)
+                    continue
+                if fin == 1:
+                    self.finRecieved = True
+                payload = data[12:]
+                self.buffer[seq] = payload
+                    
             except Exception as e:
                 print("listener died!")
                 print(e)
@@ -67,13 +78,18 @@ class Streamer:
         seq = self.seqA
         for p in packets:
             seqNum = struct.pack('i', seq)
-            ack = struct.pack('i',1)
+            ack = struct.pack('i',0)
+            fin = struct.pack('i',0)
             seq = seq + 1
-            p = ack + seqNum + p
-            while not self.ackd: 
+            p = ack + seqNum + fin + p
+            self.inFlight.append(seq-1) 
+            self.socket.sendto(p, (self.dst_ip, self.dst_port))
+            start = time.time()
+            while not self.ackd:
+                if (time.time()-start) >= 0.25:
+                    self.socket.sendto(p, (self.dst_ip, self.dst_port))
                 time.sleep(0.01)
             self.ackd = False
-            self.socket.sendto(p, (self.dst_ip, self.dst_port))
         self.seqA = seq
 
     def recv(self) -> bytes:
@@ -87,14 +103,32 @@ class Streamer:
             if self.expected in self.buffer:
                     cnt = self.expected + 1
                     totData = self.buffer[self.expected]
+                    seqNum = struct.pack('i', 1)
+                    ack = struct.pack('i',cnt-1)
+                    p = ack + seqNum
+                    self.socket.sendto(p, (self.dst_ip, self.dst_port))
+                    print('sent back ack of: ' + str(cnt-1))
                     del(self.buffer[self.expected])
                     while cnt in self.buffer:
                         print("count: " + str(cnt))
                         totData += self.buffer[cnt]
+                        totData = self.buffer[self.expected]
+                        seqNum = struct.pack('i', 1)
+                        ack = struct.pack('i',cnt)
+                        p = ack + seqNum
+                        self.socket.sendto(p, (self.dst_ip, self.dst_port))
+                        print('sent2')
                         del(self.buffer[cnt])
                         cnt += 1
                     self.expected = cnt
                     return totData
+            if self.finRecieved:
+                seqNum = struct.pack('i', 1)
+                ack = struct.pack('i',self.expected)
+                fin = struct.pack('i', 1)
+                p = ack + seqNum + fin
+                self.socket.sendto(p, (self.dst_ip, self.dst_port))
+                print('sent back ack of: ' + str(self.expected))
 
 
 
@@ -104,5 +138,26 @@ class Streamer:
         """Cleans up. It should block (wait) until the Streamer is done with all
            the necessary ACKs and retransmissions"""
         # your code goes here, especially after you add ACKs and retransmissions.
+        print("WE IN THE END GAME")
+        while len(self.inFlight) != 0:
+            print(self.inFlight)
+            time.sleep(0.01)
+            print()
+        seqNum = struct.pack('i', self.seqA)
+        ack = struct.pack('i',0)
+        fin = struct.pack('i',1)
+        p = ack + seqNum + fin
+        self.socket.sendto(p, (self.dst_ip, self.dst_port))
+        self.inFlight.append(self.seqA)
+        start = time.time()
+        while not self.finRecieved:
+            if time.time()-start > 0.25:
+                self.socket.sendto(p, (self.dst_ip, self.dst_port))
+            time.sleep(0.1)
+        start = time.time()
+        while time.time()-start < 2:
+            pass
+
         self.closed = True
         self.socket.stoprecv()
+        return
