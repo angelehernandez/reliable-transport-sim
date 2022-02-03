@@ -40,14 +40,27 @@ class Streamer:
                 fin = data[8:12]
                 fin = int.from_bytes(fin, sys.byteorder)
                 print(str(ack) + " and " + str(seq))
+                #takes care of ACKs that are dropped, if packets seq is lower than the lowest un-ACK'd value the sender never got our ack and is asking again
+                if seq < self.expected and ack == 0 and fin == 0:
+                    print("was expecting " + str(self.expected) + " and got " + str(seq))
+                    seqNum = struct.pack('i', 1)
+                    ack = struct.pack('i', seq)
+                    p = ack + seqNum
+                    self.socket.sendto(p, (self.dst_ip, self.dst_port))
+                    print('sent back ack of: ' + str(seq))
+                    continue
+                #Checks if this ack is for one of our packets that have been sent but not ack'd, if so sets ackd to true and removes it from the inflight packets
                 if ack in self.inFlight:
                     self.ackd = True
                     self.inFlight.remove(ack)
                     continue
+                #Checks fin flag, only triggered when close called
                 if fin == 1:
                     self.finRecieved = True
                 payload = data[12:]
-                self.buffer[seq] = payload
+                #Only want to add packets that aren't ack's to our buffer
+                if ack == 0:
+                    self.buffer[seq] = payload
                     
             except Exception as e:
                 print("listener died!")
@@ -75,6 +88,7 @@ class Streamer:
 
 
         # for now I'm just sending the raw application-level data in one UDP payload
+        #Loop though all packets, set current seq to our selfs tracker of the lowest unused seq number
         seq = self.seqA
         for p in packets:
             seqNum = struct.pack('i', seq)
@@ -85,11 +99,16 @@ class Streamer:
             self.inFlight.append(seq-1) 
             self.socket.sendto(p, (self.dst_ip, self.dst_port))
             start = time.time()
+            #Wait for the listener to recieve an ACK, if .60 seconds pass then retransmit
             while not self.ackd:
-                if (time.time()-start) >= 0.25:
+                print("yes im stuck in this loop")
+                print(self.inFlight)
+                if (time.time()-start) >= 0.60:
                     self.socket.sendto(p, (self.dst_ip, self.dst_port))
+                    start = time.time()
                 time.sleep(0.01)
             self.ackd = False
+        #Update seqA to be where we left off
         self.seqA = seq
 
     def recv(self) -> bytes:
@@ -97,11 +116,18 @@ class Streamer:
         # your code goes here!  The code below should be changed!
 
         # this sample code just calls the recvfrom method on the LossySocket
+        #wait till data is available
         while len(self.buffer) == 0:
             pass
+        #continue as long as data is available
         while len(self.buffer) != 0:
+            print("CURRENT BUFFER: " + str(self.buffer))
+            print("CURRENT EXPECTED: " + str(self.expected))
             if self.expected in self.buffer:
+                    
                     cnt = self.expected + 1
+                    print("CURRENT SEQ IT FOUND IN BUFFER: " + str(cnt))
+                    
                     totData = self.buffer[self.expected]
                     seqNum = struct.pack('i', 1)
                     ack = struct.pack('i',cnt-1)
@@ -122,13 +148,15 @@ class Streamer:
                         cnt += 1
                     self.expected = cnt
                     return totData
-            if self.finRecieved:
-                seqNum = struct.pack('i', 1)
-                ack = struct.pack('i',self.expected)
-                fin = struct.pack('i', 1)
-                p = ack + seqNum + fin
-                self.socket.sendto(p, (self.dst_ip, self.dst_port))
-                print('sent back ack of: ' + str(self.expected))
+        #Need to be able to send a fin ACK back once weve recived it
+        if self.finRecieved:
+            print("FIN HAS BEEN RECIEVED")
+            seqNum = struct.pack('i', 1)
+            ack = struct.pack('i',self.expected)
+            fin = struct.pack('i', 1)
+            p = ack + seqNum + fin
+            self.socket.sendto(p, (self.dst_ip, self.dst_port))
+            print('sent back ack of: ' + str(self.expected))
 
 
 
@@ -138,11 +166,9 @@ class Streamer:
         """Cleans up. It should block (wait) until the Streamer is done with all
            the necessary ACKs and retransmissions"""
         # your code goes here, especially after you add ACKs and retransmissions.
-        print("WE IN THE END GAME")
         while len(self.inFlight) != 0:
             print(self.inFlight)
             time.sleep(0.01)
-            print()
         seqNum = struct.pack('i', self.seqA)
         ack = struct.pack('i',0)
         fin = struct.pack('i',1)
@@ -150,9 +176,11 @@ class Streamer:
         self.socket.sendto(p, (self.dst_ip, self.dst_port))
         self.inFlight.append(self.seqA)
         start = time.time()
+        #After we've sent the fin we have to wait for our listener to get an ACK FIN back
         while not self.finRecieved:
             if time.time()-start > 0.25:
                 self.socket.sendto(p, (self.dst_ip, self.dst_port))
+                start = time.time()
             time.sleep(0.1)
         start = time.time()
         while time.time()-start < 2:
