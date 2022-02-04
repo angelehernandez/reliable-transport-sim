@@ -3,6 +3,7 @@ import struct
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from tabnanny import check
+from threading import Timer
 import time
 import hashlib
 
@@ -28,7 +29,7 @@ class Streamer:
         self.closed = False
         self.ackd = False
         self.inFlight = []
-        self.window = []
+        self.window = {}
         self.finRecieved = False
         self.timer = time.time()
         executor = ThreadPoolExecutor(max_workers=1)
@@ -62,12 +63,12 @@ class Streamer:
                 
                 fin = int.from_bytes(fin, sys.byteorder)
                 if str(recvHash) != str(realHash):
-                    print("ERROR DETECTED, DISCARDING PACKET")
+                    #print("ERROR DETECTED, DISCARDING PACKET")
                     continue
-                print(str(ack) + " and " + str(seq))
+                print("ACK: " + str(ack) + " and SEQ: " + str(seq))
                 #takes care of ACKs that are dropped, if packets seq is lower than the lowest un-ACK'd value the sender never got our ack and is asking again
                 if seq < self.expected and ack == 0 and fin == 0:
-                    print("was expecting " + str(self.expected) + " and got " + str(seq))
+                    #print("was expecting " + str(self.expected) + " and got " + str(seq))
                     seqNum = struct.pack('i', 1)
                     ack = struct.pack('i', seq)
                     fin = struct.pack('i',0)
@@ -78,12 +79,29 @@ class Streamer:
                     checkHash = m.digest()
                     p = ack + seqNum + fin + checkHash
                     self.socket.sendto(p, (self.dst_ip, self.dst_port))
-                    print('sent back ack of: ' + str(seq))
+                    #print('sent back ack of: ' + str(seq))
                     continue
                 #Checks if this ack is for one of our packets that have been sent but not ack'd, if so sets ackd to true and removes it from the inflight packets
+                
                 if ack in self.inFlight:
                     self.ackd = True
-                    self.inFlight.remove(ack)
+                    print("Current ack: " + str(ack))
+                    print("current minimum in flight: " + str(min(self.inFlight)))
+                    if ack == min(self.inFlight):
+                        print("this is the minimum ack in flight")
+                        self.timer = time.time()
+                        del(self.window[ack])
+                        print("New window: "+str(self.window[ack]))
+                        self.inFlight.remove(ack)
+                    else:
+                        print("This isn't the minimum in flight ACK")
+                        for item in self.inFlight:
+                            if item < ack:
+                                print("removing " + str(item))
+                                print(item in self.window)
+                                del(self.window[item])
+                                self.inFlight.remove(item)
+                        self.timer = time.time()
                     continue
                 #Checks fin flag, only triggered when close called
                 if fin == 1:
@@ -122,6 +140,15 @@ class Streamer:
         #Loop though all packets, set current seq to our selfs tracker of the lowest unused seq number
         seq = self.seqA
         for p in packets:
+            while len(self.window) >= 5:
+                if time.time() - self.timer >= 0.25:
+                    print("NAH THIS IS HOW WE SENDING")
+                    for item in self.window:
+                        print(item)
+                        self.socket.sendto(self.window[item], (self.dst_ip, self.dst_port))
+                    self.timer = time.time()
+            print("GOT INTO THE SENDER")
+            self.timer = time.time()
             seqNum = struct.pack('i', seq)
             ack = struct.pack('i',0)
             fin = struct.pack('i',0)
@@ -138,22 +165,21 @@ class Streamer:
             p = ack + seqNum + fin + checkHash + p
             self.inFlight.append(seq-1) 
             self.socket.sendto(p, (self.dst_ip, self.dst_port))
-            self.timer = time.time()
-            if time.time() - self.timer >= 0.60:
-                for item in self.window:
-                    self.socket.sendto(item, (self.dst_ip, self.dst_port))
-            else:
-                self.window.append(p)
+            self.window[seq] = p
+            
+            
+            
                 
+
             #Wait for the listener to recieve an ACK, if .60 seconds pass then retransmit
-            while not self.ackd:
-                print("yes im stuck in this loop")
-                print(self.inFlight)
-                if (time.time()-start) >= 0.60:
-                    self.socket.sendto(p, (self.dst_ip, self.dst_port))
-                    start = time.time()
-                time.sleep(0.01)
-            self.ackd = False
+            #while not self.ackd:
+            #    print("yes im stuck in this loop")
+            #    print(self.inFlight)
+            #    if (time.time()-start) >= 0.60:
+            #        self.socket.sendto(p, (self.dst_ip, self.dst_port))
+            #        start = time.time()
+            #    time.sleep(0.01)
+            #self.ackd = False
         #Update seqA to be where we left off
         self.seqA = seq
 
@@ -170,7 +196,7 @@ class Streamer:
             print("CURRENT BUFFER: " + str(self.buffer))
             #print("CURRENT EXPECTED: " + str(self.expected))
             if self.expected in self.buffer:
-                    self.timer = time.time()
+
                     cnt = self.expected + 1
                     print("CURRENT SEQ IT FOUND IN BUFFER: " + str(cnt))
                     
@@ -204,6 +230,8 @@ class Streamer:
                         del(self.buffer[cnt])
                         cnt += 1
                     self.expected = cnt
+                    
+                    
                     return totData
         #Need to be able to send a fin ACK back once weve recived it
         if self.finRecieved:
