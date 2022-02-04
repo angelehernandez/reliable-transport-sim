@@ -7,8 +7,6 @@ from threading import Timer
 import time
 import hashlib
 
-from numpy import real
-
 from lossy_socket import LossyUDP
 # do not import anything else from socket except INADDR_ANY
 from socket import INADDR_ANY
