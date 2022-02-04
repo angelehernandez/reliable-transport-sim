@@ -31,7 +31,7 @@ class Streamer:
         self.closed = False
         self.ackd = False
         self.inFlight = []
-        self.window = {}
+        self.window = []
         self.finRecieved = False
         self.timer = time.time()
         executor = ThreadPoolExecutor(max_workers=1)
@@ -84,10 +84,26 @@ class Streamer:
                     #print('sent back ack of: ' + str(seq))
                     continue
                 #Checks if this ack is for one of our packets that have been sent but not ack'd, if so sets ackd to true and removes it from the inflight packets
-                
-                if ack in self.inFlight:
-                    self.ackd = True
-                    self.inFlight.remove(ack)
+                with self.lock:
+                    if ack in self.inFlight:
+                        print("current in flight: " + str(self.inFlight))
+                        if ack == min(self.inFlight):
+                            print("UPDATING WINDOW, REMOVING" + str(self.window.pop(0)))
+                            self.timer = time.time()
+                            self.inFlight.remove(min(self.inFlight))
+                        elif ack > min(self.inFlight):
+                            print("updating window up to " + str(ack))
+                            i = ack-min(self.inFlight)+1
+                            while i>0:
+                                self.window.pop(0)
+                                self.inFlight.remove(min(self.inFlight))
+                                i-=1
+                            self.timer = time.time()
+                    else:
+                        print("ACK : " + str(ack) + " not in the inflight packets")
+                    
+
+
                     #with self.lock:
                     #    self.ackd = True
                     #    print("Current ack: " + str(ack))
@@ -121,7 +137,7 @@ class Streamer:
                 if fin == 1:
                     self.finRecieved = True
                 #Only want to add packets that aren't ack's to our buffer
-                if ack == 0:
+                if ack == 0 and seq>=self.expected:
                     print("Adding "+str(seq) + " to the payload")
                     self.buffer[seq] = payload
                     
@@ -154,6 +170,12 @@ class Streamer:
         #Loop though all packets, set current seq to our selfs tracker of the lowest unused seq number
         seq = self.seqA
         for p in packets:
+            print(len(self.window))
+            if time.time() - self.timer > 0.15:
+                    print("TIMED OUT")
+                    for item in self.window:
+                        self.socket.sendto(item, (self.dst_ip, self.dst_port))
+                    self.timer = time.time()
             #while len(self.window) >= 5:
             #    with self.lock:
             #        if time.time() - self.timer >= 0.25:
@@ -162,35 +184,31 @@ class Streamer:
             #                print(item)
             #                self.socket.sendto(self.window[item], (self.dst_ip, self.dst_port))
             #            self.timer = time.time()
-            print("GOT INTO THE SENDER")
-            self.timer = time.time()
-            seqNum = struct.pack('i', seq)
-            ack = struct.pack('i',0)
-            fin = struct.pack('i',0)
-            m = hashlib.md5()
-            m.update(ack)
-            m.update(seqNum)
-            m.update(fin)
-            m.update(p)
-            checkHash = m.digest()
-            seq = seq + 1
-            #m = hashlib.md5()
-            #m.update(p)
-            #hashe = struct.pack('s',m.digest())
-            p = ack + seqNum + fin + checkHash + p
-            self.inFlight.append(seq-1)
-            self.timer = time.time()
-            self.socket.sendto(p, (self.dst_ip, self.dst_port))
-            while not self.ackd:
-                print(self.timer - time.time())
-                if time.time() - self.timer > 0.50:
-                    self.socket.sendto(p, (self.dst_ip, self.dst_port))
-                    self.timer = time.time()
-            self.ackd = False
-                
-            #self.window[seq-1] = p
-            #print("New Window: " + str(self.window.keys()))
             
+            with self.lock:
+                print("GOT INTO THE SENDER")
+                seqNum = struct.pack('i', seq)
+                ack = struct.pack('i',0)
+                fin = struct.pack('i',0)
+                m = hashlib.md5()
+                m.update(ack)
+                m.update(seqNum)
+                m.update(fin)
+                m.update(p)
+                checkHash = m.digest()
+                seq = seq + 1
+                #m = hashlib.md5()
+                #m.update(p)
+                #hashe = struct.pack('s',m.digest())
+                p = ack + seqNum + fin + checkHash + p
+                self.inFlight.append(seq-1)
+                self.window.append(p)
+                self.socket.sendto(p, (self.dst_ip, self.dst_port))
+                self.ackd = False
+
+                #self.window[seq-1] = p
+                print("New Window length: " + str(len(self.window)))
+
             
             
                 
@@ -217,31 +235,14 @@ class Streamer:
             pass
         #continue as long as data is available
         while not self.finRecieved:
-            print("CURRENT BUFFER: " + str(self.buffer))
-            #print("CURRENT EXPECTED: " + str(self.expected))
-            if self.expected in self.buffer:
-
-                    cnt = self.expected + 1
-                    print("CURRENT SEQ IT FOUND IN BUFFER: " + str(cnt))
-                    
-                    totData = self.buffer[self.expected]
-                    seqNum = struct.pack('i', 1)
-                    ack = struct.pack('i',cnt-1)
-                    fin = struct.pack('i', 0)
-                    m = hashlib.md5()
-                    m.update(ack)
-                    m.update(seqNum)
-                    m.update(fin)
-                    checkHash = m.digest()
-                    p = ack + seqNum + fin + checkHash
-                    self.socket.sendto(p, (self.dst_ip, self.dst_port))
-                    print('sent back ack of: ' + str(cnt-1))
-                    del(self.buffer[self.expected])
-                    while cnt in self.buffer:
-                        print("count: " + str(cnt))
-                        totData += self.buffer[cnt]
+            with self.lock:
+                print("CURRENT BUFFER: " + str(self.buffer))
+                print("CURRENT EXPECTED: " + str(self.expected))
+                if self.expected in self.buffer:
+                        print("CURRENT SEQ IT FOUND IN BUFFER: " + str(self.expected))
+                        totData = self.buffer[self.expected]
                         seqNum = struct.pack('i', 1)
-                        ack = struct.pack('i',cnt)
+                        ack = struct.pack('i',self.expected)
                         fin = struct.pack('i', 0)
                         m = hashlib.md5()
                         m.update(ack)
@@ -250,13 +251,28 @@ class Streamer:
                         checkHash = m.digest()
                         p = ack + seqNum + fin + checkHash
                         self.socket.sendto(p, (self.dst_ip, self.dst_port))
-                        print('sent2')
-                        del(self.buffer[cnt])
-                        cnt += 1
-                    self.expected = cnt
-                    
-                    
-                    return totData
+                        print('sent back ack of: ' + str(self.expected))
+                        del(self.buffer[self.expected])
+                        self.expected = self.expected + 1
+                        while self.expected in self.buffer:
+                            print("count: " + str(self.expected))
+                            totData += self.buffer[self.expected]
+                            seqNum = struct.pack('i', 1)
+                            ack = struct.pack('i',self.expected)
+                            fin = struct.pack('i', 0)
+                            m = hashlib.md5()
+                            m.update(ack)
+                            m.update(seqNum)
+                            m.update(fin)
+                            checkHash = m.digest()
+                            p = ack + seqNum + fin + checkHash
+                            self.socket.sendto(p, (self.dst_ip, self.dst_port))
+                            print('sent2')
+                            del(self.buffer[self.expected])
+                            self.expected += 1
+
+
+                        return totData
         #Need to be able to send a fin ACK back once weve recived it
         if self.finRecieved:
             print("FIN HAS BEEN RECIEVED")
