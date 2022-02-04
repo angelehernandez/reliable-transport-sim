@@ -3,9 +3,10 @@ import struct
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from tabnanny import check
-from threading import Timer
+from threading import Timer,Lock
 import time
 import hashlib
+import copy
 
 from lossy_socket import LossyUDP
 # do not import anything else from socket except INADDR_ANY
@@ -17,7 +18,9 @@ class Streamer:
                  src_ip=INADDR_ANY, src_port=0):
         """Default values listen on all network interfaces, chooses a random source port,
            and does not introduce any simulated packet loss."""
+        
         self.socket = LossyUDP()
+        self.lock = Lock()
         self.socket.bind((src_ip, src_port))
         self.dst_ip = dst_ip
         self.dst_port = dst_port
@@ -82,25 +85,35 @@ class Streamer:
                 #Checks if this ack is for one of our packets that have been sent but not ack'd, if so sets ackd to true and removes it from the inflight packets
                 
                 if ack in self.inFlight:
-                    self.ackd = True
-                    print("Current ack: " + str(ack))
-                    print("current minimum in flight: " + str(min(self.inFlight)))
-                    if ack == min(self.inFlight):
-                        print("this is the minimum ack in flight")
-                        self.timer = time.time()
-                        del(self.window[ack])
-                        print("New window: "+str(self.window[ack]))
-                        self.inFlight.remove(ack)
-                    else:
-                        print("This isn't the minimum in flight ACK")
-                        for item in self.inFlight:
-                            if item < ack:
-                                print("removing " + str(item))
-                                print(item in self.window)
-                                del(self.window[item])
-                                self.inFlight.remove(item)
-                        self.timer = time.time()
-                    continue
+                    with self.lock:
+                        self.ackd = True
+                        print("Current ack: " + str(ack))
+                        print("current minimum in flight: " + str(min(self.inFlight)))
+                        if ack == min(self.inFlight):
+                            print("this is the minimum ack in flight")
+                            self.timer = time.time()
+                            print(self.window.keys())
+                            if ack in self.window:
+                                del self.window[ack]
+                            else:
+                                print("already deleted")
+                            print("New window: "+str(self.window[ack]))
+                            print("Inflight seqs: " + str(self.inFlight))
+                            self.inFlight.remove(ack)
+                        else:
+                            print("This isn't the minimum in flight ACK")
+                            flightLog = copy.deepcopy(self.inFlight)
+                            for item in flightLog:
+                                if item <= ack:
+                                    print("removing " + str(item))
+                                    print(item in self.window)
+                                    if item in self.window:
+                                        
+                                        del self.window[item]
+                                    print("Inflight seqs: " + str(self.inFlight))
+                                    self.inFlight.remove(item)
+                            self.timer = time.time()
+                        continue
                 #Checks fin flag, only triggered when close called
                 if fin == 1:
                     self.finRecieved = True
@@ -139,12 +152,13 @@ class Streamer:
         seq = self.seqA
         for p in packets:
             while len(self.window) >= 5:
-                if time.time() - self.timer >= 0.25:
-                    print("NAH THIS IS HOW WE SENDING")
-                    for item in self.window:
-                        print(item)
-                        self.socket.sendto(self.window[item], (self.dst_ip, self.dst_port))
-                    self.timer = time.time()
+                with self.lock:
+                    if time.time() - self.timer >= 0.25:
+                        print("NAH THIS IS HOW WE SENDING")
+                        for item in self.window:
+                            print(item)
+                            self.socket.sendto(self.window[item], (self.dst_ip, self.dst_port))
+                        self.timer = time.time()
             print("GOT INTO THE SENDER")
             self.timer = time.time()
             seqNum = struct.pack('i', seq)
@@ -163,7 +177,8 @@ class Streamer:
             p = ack + seqNum + fin + checkHash + p
             self.inFlight.append(seq-1) 
             self.socket.sendto(p, (self.dst_ip, self.dst_port))
-            self.window[seq] = p
+            self.window[seq-1] = p
+            print("New Window: " + str(self.window.keys()))
             
             
             
