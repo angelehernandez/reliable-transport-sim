@@ -7,6 +7,7 @@ from threading import Timer,Lock
 import time
 import hashlib
 import copy
+from tracemalloc import start
 
 from lossy_socket import LossyUDP
 # do not import anything else from socket except INADDR_ANY
@@ -85,35 +86,37 @@ class Streamer:
                 #Checks if this ack is for one of our packets that have been sent but not ack'd, if so sets ackd to true and removes it from the inflight packets
                 
                 if ack in self.inFlight:
-                    with self.lock:
-                        self.ackd = True
-                        print("Current ack: " + str(ack))
-                        print("current minimum in flight: " + str(min(self.inFlight)))
-                        if ack == min(self.inFlight):
-                            print("this is the minimum ack in flight")
-                            self.timer = time.time()
-                            print(self.window.keys())
-                            if ack in self.window:
-                                del self.window[ack]
-                            else:
-                                print("already deleted")
-                            print("New window: "+str(self.window[ack]))
-                            print("Inflight seqs: " + str(self.inFlight))
-                            self.inFlight.remove(ack)
-                        else:
-                            print("This isn't the minimum in flight ACK")
-                            flightLog = copy.deepcopy(self.inFlight)
-                            for item in flightLog:
-                                if item <= ack:
-                                    print("removing " + str(item))
-                                    print(item in self.window)
-                                    if item in self.window:
-                                        
-                                        del self.window[item]
-                                    print("Inflight seqs: " + str(self.inFlight))
-                                    self.inFlight.remove(item)
-                            self.timer = time.time()
-                        continue
+                    self.ackd = True
+                    self.inFlight.remove(ack)
+                    #with self.lock:
+                    #    self.ackd = True
+                    #    print("Current ack: " + str(ack))
+                    #    print("current minimum in flight: " + str(min(self.inFlight)))
+                    #    if ack == min(self.inFlight):
+                    #        print("this is the minimum ack in flight")
+                    #        self.timer = time.time()
+                    #        print(self.window.keys())
+                    #        if ack in self.window:
+                    #            del self.window[ack]
+                    #        else:
+                    #            print("already deleted")
+                    #        print("New window: "+str(self.window[ack]))
+                    #        print("Inflight seqs: " + str(self.inFlight))
+                    #        self.inFlight.remove(ack)
+                    #    else:
+                    #        print("This isn't the minimum in flight ACK")
+                    #        flightLog = copy.deepcopy(self.inFlight)
+                    #        for item in flightLog:
+                    #            if item <= ack:
+                    #                print("removing " + str(item))
+                    #                print(item in self.window)
+                    #                if item in self.window:
+                    #                    
+                    #                    del self.window[item]
+                    #                print("Inflight seqs: " + str(self.inFlight))
+                    #                self.inFlight.remove(item)
+                    #        self.timer = time.time()
+                    #    continue
                 #Checks fin flag, only triggered when close called
                 if fin == 1:
                     self.finRecieved = True
@@ -151,14 +154,14 @@ class Streamer:
         #Loop though all packets, set current seq to our selfs tracker of the lowest unused seq number
         seq = self.seqA
         for p in packets:
-            while len(self.window) >= 5:
-                with self.lock:
-                    if time.time() - self.timer >= 0.25:
-                        print("NAH THIS IS HOW WE SENDING")
-                        for item in self.window:
-                            print(item)
-                            self.socket.sendto(self.window[item], (self.dst_ip, self.dst_port))
-                        self.timer = time.time()
+            #while len(self.window) >= 5:
+            #    with self.lock:
+            #        if time.time() - self.timer >= 0.25:
+            #            print("NAH THIS IS HOW WE SENDING")
+            #            for item in self.window:
+            #                print(item)
+            #                self.socket.sendto(self.window[item], (self.dst_ip, self.dst_port))
+            #            self.timer = time.time()
             print("GOT INTO THE SENDER")
             self.timer = time.time()
             seqNum = struct.pack('i', seq)
@@ -175,10 +178,18 @@ class Streamer:
             #m.update(p)
             #hashe = struct.pack('s',m.digest())
             p = ack + seqNum + fin + checkHash + p
-            self.inFlight.append(seq-1) 
+            self.inFlight.append(seq-1)
+            self.timer = time.time()
             self.socket.sendto(p, (self.dst_ip, self.dst_port))
-            self.window[seq-1] = p
-            print("New Window: " + str(self.window.keys()))
+            while not self.ackd:
+                print(self.timer - time.time())
+                if time.time() - self.timer > 0.50:
+                    self.socket.sendto(p, (self.dst_ip, self.dst_port))
+                    self.timer = time.time()
+            self.ackd = False
+                
+            #self.window[seq-1] = p
+            #print("New Window: " + str(self.window.keys()))
             
             
             
