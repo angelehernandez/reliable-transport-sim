@@ -235,10 +235,11 @@ class Streamer:
             pass
         #continue as long as data is available
         while not self.finRecieved:
-            with self.lock:
+            
                 print("CURRENT BUFFER: " + str(self.buffer))
                 print("CURRENT EXPECTED: " + str(self.expected))
                 if self.expected in self.buffer:
+                    with self.lock:
                         print("CURRENT SEQ IT FOUND IN BUFFER: " + str(self.expected))
                         totData = self.buffer[self.expected]
                         seqNum = struct.pack('i', 1)
