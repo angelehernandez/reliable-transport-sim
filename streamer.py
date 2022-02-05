@@ -56,9 +56,9 @@ class Streamer:
                 m.update(fin)
                 m.update(payload)
                 recvHash = m.digest()
-                print("SIZE: " + str(m.digest_size))
-                print("RECIEVED HASH: " + str(recvHash))
-                print("REAL HASH: " + str(realHash))
+                #print("SIZE: " + str(m.digest_size))
+                #print("RECIEVED HASH: " + str(recvHash))
+                #print("REAL HASH: " + str(realHash))
                 ack = int.from_bytes(ack, sys.byteorder)
                 
                 seq = int.from_bytes(seq, sys.byteorder)
@@ -67,7 +67,7 @@ class Streamer:
                 if str(recvHash) != str(realHash):
                     #print("ERROR DETECTED, DISCARDING PACKET")
                     continue
-                print("ACK: " + str(ack) + " and SEQ: " + str(seq))
+                #print("ACK: " + str(ack) + " and SEQ: " + str(seq))
                 #takes care of ACKs that are dropped, if packets seq is lower than the lowest un-ACK'd value the sender never got our ack and is asking again
                 if seq < self.expected and ack == 0 and fin == 0:
                     #print("was expecting " + str(self.expected) + " and got " + str(seq))
@@ -84,23 +84,40 @@ class Streamer:
                     #print('sent back ack of: ' + str(seq))
                     continue
                 #Checks if this ack is for one of our packets that have been sent but not ack'd, if so sets ackd to true and removes it from the inflight packets
-                with self.lock:
-                    if ack in self.inFlight:
-                        print("current in flight: " + str(self.inFlight))
-                        if ack == min(self.inFlight):
-                            print("UPDATING WINDOW, REMOVING" + str(self.window.pop(0)))
-                            self.timer = time.time()
+                
+                
+                if time.time() - self.timer > 0.15:
+                    print("TIMED OUT")
+                    #self.printCurrWindow()
+                    with self.lock:
+                        for item in self.window:
+                            self.socket.sendto(item, (self.dst_ip, self.dst_port))
+                        self.timer = time.time()
+                
+                if ack in self.inFlight:
+                    #print("current in flight: " + str(self.inFlight))
+                    #print("We have recieved an ACK, here is the window before: ")
+                    #self.printCurrWindow()
+                    if ack == min(self.inFlight):
+                        
+                        #print("RESETTING TIMER BECAUSE WE GOT " + str(ack))
+                        self.timer = time.time()
+                        with self.lock:
+                            self.window.pop(0)
                             self.inFlight.remove(min(self.inFlight))
-                        elif ack > min(self.inFlight):
-                            print("updating window up to " + str(ack))
-                            i = ack-min(self.inFlight)+1
-                            while i>0:
-                                self.window.pop(0)
-                                self.inFlight.remove(min(self.inFlight))
-                                i-=1
-                            self.timer = time.time()
-                    else:
-                        print("ACK : " + str(ack) + " not in the inflight packets")
+                    elif ack > min(self.inFlight):
+                        #print("updating window up to " + str(ack))
+                        i = ack-min(self.inFlight)+1
+                        while i>0:
+                            self.window.pop(0)
+                            self.inFlight.remove(min(self.inFlight))
+                            i-=1
+                        print("RESETTING TIMER BECAUSE WE GOT " + str(ack))
+                        self.timer = time.time()
+                    #print("We have recieved an ACK, here is the window after: ")
+                    #self.printCurrWindow()
+
+            
                     
 
 
@@ -171,11 +188,7 @@ class Streamer:
         seq = self.seqA
         for p in packets:
             print(len(self.window))
-            if time.time() - self.timer > 0.15:
-                    print("TIMED OUT")
-                    for item in self.window:
-                        self.socket.sendto(item, (self.dst_ip, self.dst_port))
-                    self.timer = time.time()
+            
             #while len(self.window) >= 5:
             #    with self.lock:
             #        if time.time() - self.timer >= 0.25:
@@ -185,29 +198,28 @@ class Streamer:
             #                self.socket.sendto(self.window[item], (self.dst_ip, self.dst_port))
             #            self.timer = time.time()
             
+                #print("GOT INTO THE SENDER")
+            seqNum = struct.pack('i', seq)
+            ack = struct.pack('i',0)
+            fin = struct.pack('i',0)
+            m = hashlib.md5()
+            m.update(ack)
+            m.update(seqNum)
+            m.update(fin)
+            m.update(p)
+            checkHash = m.digest()
+            seq = seq + 1
+            #m = hashlib.md5()
+            #m.update(p)
+            #hashe = struct.pack('s',m.digest())
+            p = ack + seqNum + fin + checkHash + p
             with self.lock:
-                print("GOT INTO THE SENDER")
-                seqNum = struct.pack('i', seq)
-                ack = struct.pack('i',0)
-                fin = struct.pack('i',0)
-                m = hashlib.md5()
-                m.update(ack)
-                m.update(seqNum)
-                m.update(fin)
-                m.update(p)
-                checkHash = m.digest()
-                seq = seq + 1
-                #m = hashlib.md5()
-                #m.update(p)
-                #hashe = struct.pack('s',m.digest())
-                p = ack + seqNum + fin + checkHash + p
                 self.inFlight.append(seq-1)
                 self.window.append(p)
                 self.socket.sendto(p, (self.dst_ip, self.dst_port))
                 self.ackd = False
-
-                #self.window[seq-1] = p
-                print("New Window length: " + str(len(self.window)))
+            #self.window[seq-1] = p
+            #print("New Window length: " + str(len(self.window)))
 
             
             
@@ -236,11 +248,11 @@ class Streamer:
         #continue as long as data is available
         while not self.finRecieved:
             
-                print("CURRENT BUFFER: " + str(self.buffer))
-                print("CURRENT EXPECTED: " + str(self.expected))
+                #print("CURRENT BUFFER: " + str(self.buffer))
+                #print("CURRENT EXPECTED: " + str(self.expected))
                 if self.expected in self.buffer:
                     with self.lock:
-                        print("CURRENT SEQ IT FOUND IN BUFFER: " + str(self.expected))
+                        #print("CURRENT SEQ IT FOUND IN BUFFER: " + str(self.expected))
                         totData = self.buffer[self.expected]
                         seqNum = struct.pack('i', 1)
                         ack = struct.pack('i',self.expected)
@@ -256,7 +268,7 @@ class Streamer:
                         del(self.buffer[self.expected])
                         self.expected = self.expected + 1
                         while self.expected in self.buffer:
-                            print("count: " + str(self.expected))
+                            #print("count: " + str(self.expected))
                             totData += self.buffer[self.expected]
                             seqNum = struct.pack('i', 1)
                             ack = struct.pack('i',self.expected)
@@ -268,11 +280,9 @@ class Streamer:
                             checkHash = m.digest()
                             p = ack + seqNum + fin + checkHash
                             self.socket.sendto(p, (self.dst_ip, self.dst_port))
-                            print('sent2')
+                            #print('sent2')
                             del(self.buffer[self.expected])
                             self.expected += 1
-
-
                         return totData
         #Need to be able to send a fin ACK back once weve recived it
         if self.finRecieved:
@@ -320,3 +330,10 @@ class Streamer:
         self.closed = True
         self.socket.stoprecv()
         return
+
+    def printCurrWindow(self):
+        print("These are the sequences currently in window:\n")
+        for item in self.window:
+            seq = item[4:8]
+            seq = int.from_bytes(seq, sys.byteorder)
+            print("SEQ: " + str(seq))
